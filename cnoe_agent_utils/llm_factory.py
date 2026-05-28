@@ -81,6 +81,27 @@ def _resolve_bedrock_client(model_id: str, enable_cache: bool) -> str:
         return "anthropic"
     return "converse" if enable_cache else "legacy"
 
+def _timeout_value(value: Any) -> int | None:
+    """Parse a timeout value from env/config/client objects."""
+    if value in (None, ""):
+        return None
+    return int(value)
+
+def _timeout_from_config(config: Any, name: str) -> int | None:
+    if config is None:
+        return None
+    return _timeout_value(getattr(config, name, None))
+
+def _timeout_from_boto_client(client: Any, name: str) -> int | None:
+    client_config = getattr(getattr(client, "meta", None), "config", None)
+    return _timeout_from_config(client_config, name)
+
+def _build_anthropic_timeout(read_timeout: int | None) -> float | None:
+    """Build an Anthropic timeout from Bedrock read timeout settings."""
+    if read_timeout is None:
+        return None
+    return float(read_timeout)
+
 # Extended thinking configuration constants
 THINKING_DEFAULT_BUDGET = 1024
 THINKING_MIN_BUDGET = 1024
@@ -495,12 +516,21 @@ class LLMFactory:
       anthropic_args.pop("credentials_profile_name", None)
       anthropic_args.pop("provider", None)
       anthropic_args.pop("base_model_id", None)
+      boto_config = anthropic_args.pop("config", None)
+      boto_runtime_client = anthropic_args.pop("client", None)
+      anthropic_args.pop("bedrock_client", None)
       model_kwargs = dict(anthropic_args.get("model_kwargs", {}))
       if "thinking" in model_kwargs and "thinking" not in anthropic_args:
         anthropic_args["thinking"] = model_kwargs.pop("thinking")
         anthropic_args["model_kwargs"] = model_kwargs
-      if anthropic_args.pop("config", None) is not None and read_timeout and "timeout" not in anthropic_args:
-        anthropic_args["timeout"] = int(read_timeout)
+      if "timeout" not in anthropic_args:
+        anthropic_timeout = _build_anthropic_timeout(
+          _timeout_value(read_timeout)
+          or _timeout_from_config(boto_config, "read_timeout")
+          or _timeout_from_boto_client(boto_runtime_client, "read_timeout"),
+        )
+        if anthropic_timeout is not None:
+          anthropic_args["timeout"] = anthropic_timeout
       llm = ChatAnthropicBedrock(**anthropic_args)
       logging.info("[LLM] Using ChatAnthropicBedrock for Anthropic Claude on Bedrock")
     elif bedrock_client == "converse":

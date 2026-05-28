@@ -135,6 +135,62 @@ class TestBedrockPromptCaching:
 
     @patch.dict(os.environ, {
         "LLM_PROVIDER": "aws-bedrock",
+        "AWS_BEDROCK_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": "test_key",
+        "AWS_SECRET_ACCESS_KEY": "test_secret",
+        "AWS_BEDROCK_CLIENT": "auto",
+        "AWS_BEDROCK_READ_TIMEOUT": "",
+        "AWS_BEDROCK_CONNECT_TIMEOUT": ""
+    })
+    @patch("langchain_aws.ChatAnthropicBedrock")
+    def test_anthropic_model_maps_botocore_config_timeout(self, mock_chat_anthropic_bedrock):
+        """Test that Botocore config read timeouts map to Anthropic timeouts."""
+        from botocore.config import Config as BotocoreConfig
+
+        mock_instance = MagicMock()
+        mock_chat_anthropic_bedrock.return_value = mock_instance
+
+        factory = LLMFactory("aws-bedrock")
+        llm = factory.get_llm(config=BotocoreConfig(read_timeout=123, connect_timeout=45))
+
+        call_kwargs = mock_chat_anthropic_bedrock.call_args.kwargs
+        assert "config" not in call_kwargs
+        assert call_kwargs["timeout"] == 123.0
+        assert llm == mock_instance
+
+    @patch.dict(os.environ, {
+        "LLM_PROVIDER": "aws-bedrock",
+        "AWS_BEDROCK_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "AWS_REGION": "us-east-1",
+        "AWS_ACCESS_KEY_ID": "test_key",
+        "AWS_SECRET_ACCESS_KEY": "test_secret",
+        "AWS_BEDROCK_CLIENT": "auto",
+        "AWS_BEDROCK_READ_TIMEOUT": "",
+        "AWS_BEDROCK_CONNECT_TIMEOUT": ""
+    })
+    @patch("langchain_aws.ChatAnthropicBedrock")
+    def test_anthropic_model_maps_shared_boto_client_timeout(self, mock_chat_anthropic_bedrock):
+        """Test that shared boto clients are not passed into ChatAnthropicBedrock."""
+        from botocore.config import Config as BotocoreConfig
+
+        mock_instance = MagicMock()
+        mock_chat_anthropic_bedrock.return_value = mock_instance
+        runtime_client = MagicMock()
+        runtime_client.meta.config = BotocoreConfig(read_timeout=321, connect_timeout=54)
+        control_client = MagicMock()
+
+        factory = LLMFactory("aws-bedrock")
+        llm = factory.get_llm(client=runtime_client, bedrock_client=control_client)
+
+        call_kwargs = mock_chat_anthropic_bedrock.call_args.kwargs
+        assert "client" not in call_kwargs
+        assert "bedrock_client" not in call_kwargs
+        assert call_kwargs["timeout"] == 321.0
+        assert llm == mock_instance
+
+    @patch.dict(os.environ, {
+        "LLM_PROVIDER": "aws-bedrock",
         "AWS_BEDROCK_MODEL_ID": "us.amazon.nova-premier-v1:0",
         "AWS_REGION": "us-east-1",
         "AWS_ACCESS_KEY_ID": "test_key",
