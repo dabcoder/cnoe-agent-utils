@@ -7,11 +7,32 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from cnoe_agent_utils import resolve_bedrock_client, uses_anthropic_bedrock_client
 from cnoe_agent_utils.llm_factory import LLMFactory
 
 
 class TestBedrockPromptCaching:
     """Test suite for AWS Bedrock prompt caching support."""
+
+    @pytest.mark.parametrize("client_setting", ["auto", "anthropic", "anthropic-bedrock", "chat-anthropic-bedrock"])
+    def test_public_helper_detects_anthropic_bedrock_client(self, client_setting):
+        """Test public Bedrock helper used by callers that manage transport clients."""
+        with patch.dict(os.environ, {"AWS_BEDROCK_CLIENT": client_setting}):
+            assert uses_anthropic_bedrock_client("global.anthropic.claude-sonnet-4-5-v1:0")
+            assert LLMFactory.uses_anthropic_bedrock_client("global.anthropic.claude-sonnet-4-5-v1:0")
+
+    @pytest.mark.parametrize("client_setting", ["converse", "legacy"])
+    def test_public_helper_respects_explicit_non_anthropic_client(self, client_setting):
+        """Test explicit Bedrock client overrides are visible through the public helper."""
+        with patch.dict(os.environ, {"AWS_BEDROCK_CLIENT": client_setting}):
+            assert not uses_anthropic_bedrock_client("anthropic.claude-sonnet-4-5")
+
+    @patch.dict(os.environ, {"AWS_BEDROCK_CLIENT": "auto"})
+    def test_public_resolver_keeps_cache_choice_for_non_anthropic_models(self):
+        """Test the public resolver exposes the full cnoe-agent-utils client decision."""
+        assert resolve_bedrock_client("amazon.nova-pro-v1:0", enable_cache=True) == "converse"
+        assert resolve_bedrock_client("amazon.nova-pro-v1:0", enable_cache=False) == "legacy"
+        assert LLMFactory.resolve_bedrock_client("amazon.nova-pro-v1:0", enable_cache=True) == "converse"
 
     @patch.dict(os.environ, {
         "LLM_PROVIDER": "aws-bedrock",

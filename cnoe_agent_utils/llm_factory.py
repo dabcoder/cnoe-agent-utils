@@ -65,7 +65,7 @@ def _as_bool(v: Optional[str], default: bool=False) -> bool:
         return False
     return default
 
-def _resolve_bedrock_client(model_id: str, enable_cache: bool) -> str:
+def resolve_bedrock_client(model_id: str, enable_cache: bool = False) -> Literal["anthropic", "converse", "legacy"]:
     """Resolve which LangChain Bedrock chat client to use."""
     configured = os.getenv("AWS_BEDROCK_CLIENT", "auto").strip().lower()
     selected = _BEDROCK_CLIENT_ALIASES.get(configured)
@@ -80,6 +80,10 @@ def _resolve_bedrock_client(model_id: str, enable_cache: bool) -> str:
     if "anthropic" in model_id.lower():
         return "anthropic"
     return "converse" if enable_cache else "legacy"
+
+def uses_anthropic_bedrock_client(model_id: str) -> bool:
+    """Return whether a Bedrock model should use ChatAnthropicBedrock."""
+    return resolve_bedrock_client(model_id) == "anthropic"
 
 def _timeout_value(value: Any) -> int | None:
     """Parse a timeout value from env/config/client objects."""
@@ -192,6 +196,16 @@ class LLMFactory:
         providers.add("groq")
 
     return providers
+
+  @staticmethod
+  def resolve_bedrock_client(model_id: str, enable_cache: bool = False) -> Literal["anthropic", "converse", "legacy"]:
+    """Resolve which LangChain Bedrock chat client should be used."""
+    return resolve_bedrock_client(model_id, enable_cache)
+
+  @staticmethod
+  def uses_anthropic_bedrock_client(model_id: str) -> bool:
+    """Return whether a Bedrock model should use ChatAnthropicBedrock."""
+    return uses_anthropic_bedrock_client(model_id)
 
   @classmethod
   def is_provider_available(cls, provider: str) -> bool:
@@ -507,7 +521,7 @@ class LLMFactory:
       model_kwargs["response_format"] = response_format
       common_args["model_kwargs"] = model_kwargs
 
-    bedrock_client = _resolve_bedrock_client(model_id, enable_cache)
+    bedrock_client = resolve_bedrock_client(model_id, enable_cache)
     logging.info("[LLM] Bedrock client selected: %s", bedrock_client)
 
     if bedrock_client == "anthropic":
