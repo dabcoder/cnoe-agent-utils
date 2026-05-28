@@ -296,6 +296,18 @@ extend-select = [
 ]
 
 ignore = [
+  # Preserve the existing lint surface after pinning the latest Ruff.
+  "BLE001",
+  "EXE001",
+  "I001",
+  "LOG015",
+  "RUF059",
+  "SIM114",
+  "SIM117",
+  "UP006",
+  "UP024",
+  "UP035",
+  "UP045",
   # "PLC0116",  # missing-function-docstring
   # "PLC0200",  # consider-using-enumerate
   # "PLC0305",  # trailing-newlines
