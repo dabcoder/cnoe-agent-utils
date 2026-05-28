@@ -39,6 +39,21 @@ logging.basicConfig(
 
 _TRUE = {"1","true","t","yes","y","on"}
 _FALSE = {"0","false","f","no","n","off"}
+_BEDROCK_CLIENT_ALIASES = {
+    "auto": "auto",
+    "anthropic": "anthropic",
+    "anthropic-bedrock": "anthropic",
+    "chat-anthropic-bedrock": "anthropic",
+    "chatanthropicbedrock": "anthropic",
+    "converse": "converse",
+    "bedrock-converse": "converse",
+    "chat-bedrock-converse": "converse",
+    "chatbedrockconverse": "converse",
+    "legacy": "legacy",
+    "bedrock": "legacy",
+    "chat-bedrock": "legacy",
+    "chatbedrock": "legacy",
+}
 
 def _as_bool(v: Optional[str], default: bool=False) -> bool:
     if v is None:
@@ -49,6 +64,22 @@ def _as_bool(v: Optional[str], default: bool=False) -> bool:
     if vv in _FALSE:
         return False
     return default
+
+def _resolve_bedrock_client(model_id: str, enable_cache: bool) -> str:
+    """Resolve which LangChain Bedrock chat client to use."""
+    configured = os.getenv("AWS_BEDROCK_CLIENT", "auto").strip().lower()
+    selected = _BEDROCK_CLIENT_ALIASES.get(configured)
+    if selected is None:
+        allowed = ", ".join(sorted(_BEDROCK_CLIENT_ALIASES))
+        raise ValueError(
+            f"Unsupported AWS_BEDROCK_CLIENT={configured!r}. "
+            f"Expected one of: {allowed}."
+        )
+    if selected != "auto":
+        return selected
+    if "anthropic" in model_id.lower():
+        return "anthropic"
+    return "converse" if enable_cache else "legacy"
 
 # Extended thinking configuration constants
 THINKING_DEFAULT_BUDGET = 1024
@@ -316,7 +347,7 @@ class LLMFactory:
         "AWS Bedrock support requires langchain-aws. "
         "Install with: pip install 'cnoe-agent-utils[aws]'"
       )
-    from langchain_aws import ChatBedrock, ChatBedrockConverse
+    from langchain_aws import ChatAnthropicBedrock, ChatBedrock, ChatBedrockConverse
     from botocore.config import Config as BotocoreConfig
     aws_access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
     aws_secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -367,7 +398,7 @@ class LLMFactory:
     enable_cache = _as_bool(os.getenv("AWS_BEDROCK_ENABLE_PROMPT_CACHE"), False)
 
     if enable_cache:
-      logging.info(f"[LLM] Prompt caching enabled for Bedrock model={model_id}. Using ChatBedrockConverse.")
+      logging.info(f"[LLM] Prompt caching enabled for Bedrock model={model_id}.")
       logging.info("[LLM] If model doesn't support caching, AWS Bedrock API will return an error.")
 
     logging.info(f"[LLM] Bedrock model={model_id} profile={credentials_profile} region={region_name}")
@@ -455,23 +486,38 @@ class LLMFactory:
       model_kwargs["response_format"] = response_format
       common_args["model_kwargs"] = model_kwargs
 
-    # Use ChatBedrockConverse when caching is enabled (native prompt caching support)
-    # Otherwise use ChatBedrock (legacy)
-    if enable_cache:
-        # ChatBedrockConverse doesn't support 'streaming' parameter
-        # Streaming is enabled by default for Converse API
-        llm = ChatBedrockConverse(**common_args)
-        logging.info("[LLM] Using ChatBedrockConverse with native prompt caching support")
+    bedrock_client = _resolve_bedrock_client(model_id, enable_cache)
+    logging.info("[LLM] Bedrock client selected: %s", bedrock_client)
+
+    if bedrock_client == "anthropic":
+      anthropic_args = dict(common_args)
+      anthropic_args["model"] = anthropic_args.pop("model_id")
+      anthropic_args.pop("credentials_profile_name", None)
+      anthropic_args.pop("provider", None)
+      anthropic_args.pop("base_model_id", None)
+      model_kwargs = dict(anthropic_args.get("model_kwargs", {}))
+      if "thinking" in model_kwargs and "thinking" not in anthropic_args:
+        anthropic_args["thinking"] = model_kwargs.pop("thinking")
+        anthropic_args["model_kwargs"] = model_kwargs
+      if anthropic_args.pop("config", None) is not None and read_timeout and "timeout" not in anthropic_args:
+        anthropic_args["timeout"] = int(read_timeout)
+      llm = ChatAnthropicBedrock(**anthropic_args)
+      logging.info("[LLM] Using ChatAnthropicBedrock for Anthropic Claude on Bedrock")
+    elif bedrock_client == "converse":
+      # ChatBedrockConverse doesn't support 'streaming' parameter.
+      # Streaming is enabled by default for Converse API.
+      llm = ChatBedrockConverse(**common_args)
+      logging.info("[LLM] Using ChatBedrockConverse with native prompt caching support")
     else:
-        # ChatBedrock supports streaming and needs beta_use_converse_api
-        streaming = _as_bool(os.getenv("AWS_BEDROCK_STREAMING", os.getenv("LLM_STREAMING", "true")), True)
-        use_converse_api = _as_bool(os.getenv("AWS_BEDROCK_USE_CONVERSE_API", "true"), True)
-        llm = ChatBedrock(
-          **common_args,
-          streaming=streaming,
-          beta_use_converse_api=use_converse_api
-        )
-        logging.info("[LLM] Using ChatBedrock")
+      # ChatBedrock supports streaming and needs beta_use_converse_api.
+      streaming = _as_bool(os.getenv("AWS_BEDROCK_STREAMING", os.getenv("LLM_STREAMING", "true")), True)
+      use_converse_api = _as_bool(os.getenv("AWS_BEDROCK_USE_CONVERSE_API", "true"), True)
+      llm = ChatBedrock(
+        **common_args,
+        streaming=streaming,
+        beta_use_converse_api=use_converse_api
+      )
+      logging.info("[LLM] Using ChatBedrock")
 
     return llm
 

@@ -14,6 +14,15 @@ from cnoe_agent_utils.llm_factory import (
 )
 
 
+def _get_thinking_config(llm):
+  """Return thinking config from either explicit model field or model_kwargs."""
+  thinking = getattr(llm, "thinking", None)
+  if thinking is not None:
+    return thinking
+  model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
+  return model_kwargs.get("thinking")
+
+
 class TestThinkingBudgetParsing:
   """Test the _parse_thinking_budget helper function."""
 
@@ -78,9 +87,7 @@ class TestBedrockExtendedThinking:
       clear=False,
     ):
       llm = factory._build_aws_bedrock_llm(None, 0.0)
-      # Verify thinking is not in model_kwargs
-      model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
-      assert "thinking" not in model_kwargs
+      assert _get_thinking_config(llm) is None
 
   def test_thinking_enabled(self):
     """Test that thinking is enabled when env var is set."""
@@ -99,10 +106,8 @@ class TestBedrockExtendedThinking:
       clear=False,
     ):
       llm = factory._build_aws_bedrock_llm(None, 0.0)
-      # Verify thinking configuration
-      model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
-      assert "thinking" in model_kwargs
-      thinking = model_kwargs["thinking"]
+      thinking = _get_thinking_config(llm)
+      assert thinking is not None
       assert thinking["type"] == "enabled"
       assert thinking["budget_tokens"] == 5000
 
@@ -122,8 +127,8 @@ class TestBedrockExtendedThinking:
       clear=False,
     ):
       llm = factory._build_aws_bedrock_llm(None, 0.0)
-      model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
-      thinking = model_kwargs.get("thinking", {})
+      thinking = _get_thinking_config(llm)
+      assert thinking is not None
       assert thinking["budget_tokens"] == THINKING_DEFAULT_BUDGET
 
   def test_thinking_budget_clamped_to_max_tokens(self):
@@ -143,8 +148,8 @@ class TestBedrockExtendedThinking:
       clear=False,
     ):
       llm = factory._build_aws_bedrock_llm(None, 0.0, max_tokens=8000)
-      model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
-      thinking = model_kwargs.get("thinking", {})
+      thinking = _get_thinking_config(llm)
+      assert thinking is not None
       assert thinking["budget_tokens"] == 8000
 
   def test_thinking_preserved_with_response_format(self):
@@ -168,10 +173,10 @@ class TestBedrockExtendedThinking:
 
       # Verify BOTH thinking and response_format are present
       model_kwargs = llm.model_kwargs if hasattr(llm, "model_kwargs") else {}
-      assert "thinking" in model_kwargs, "Thinking config should not be clobbered"
+      thinking = _get_thinking_config(llm)
+      assert thinking is not None, "Thinking config should not be clobbered"
       assert "response_format" in model_kwargs, "Response format should be set"
 
-      thinking = model_kwargs.get("thinking", {})
       assert thinking["type"] == "enabled"
       assert thinking["budget_tokens"] == 3000
       assert model_kwargs["response_format"] == {"type": "json_object"}
