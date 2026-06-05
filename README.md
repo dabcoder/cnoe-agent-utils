@@ -237,11 +237,23 @@ AWS Bedrock supports **prompt caching** to reduce latency and costs by caching r
 export AWS_BEDROCK_ENABLE_PROMPT_CACHE=true
 ```
 
+**Bedrock client selection:**
+
+By default, `AWS_BEDROCK_CLIENT=auto`. In auto mode, Anthropic model IDs use `ChatAnthropicBedrock`; other models use `ChatBedrockConverse` when prompt caching is enabled and `ChatBedrock` otherwise.
+
+You can override this behavior explicitly:
+
+```bash
+export AWS_BEDROCK_CLIENT=anthropic  # ChatAnthropicBedrock
+export AWS_BEDROCK_CLIENT=converse   # ChatBedrockConverse
+export AWS_BEDROCK_CLIENT=legacy     # ChatBedrock
+```
+
 **Supported Models:**
 
 For the latest list of models that support prompt caching and their minimum token requirements, see the [AWS Bedrock Prompt Caching documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html).
 
-**Implementation Note:** When `AWS_BEDROCK_ENABLE_PROMPT_CACHE=true`, the library uses `ChatBedrockConverse` which has native prompt caching support. If your model doesn't support caching, AWS Bedrock will return a clear error message. There's no need to validate model compatibility in advance—AWS handles this automatically.
+**Implementation Note:** Anthropic Claude models on Bedrock use `ChatAnthropicBedrock` by default so Anthropic-specific Bedrock behavior, including context overflow handling, is surfaced consistently through LangChain. If you need `ChatBedrockConverse` APIs such as `create_cache_point()`, set `AWS_BEDROCK_CLIENT=converse`. If your model doesn't support caching, AWS Bedrock will return a clear error message. There's no need to validate model compatibility in advance—AWS handles this automatically.
 
 **Note:** Model IDs may include regional prefixes (`us.`, `eu.`, `ap.`, etc.) depending on your AWS account configuration. Pass the full model ID as provided by AWS:
 - Example: `us.anthropic.claude-3-7-sonnet-20250219-v1:0`
@@ -262,6 +274,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 # Enable caching
 os.environ["AWS_BEDROCK_ENABLE_PROMPT_CACHE"] = "true"
+os.environ["AWS_BEDROCK_CLIENT"] = "converse"
 
 # Initialize LLM
 llm = LLMFactory("aws-bedrock").get_llm()

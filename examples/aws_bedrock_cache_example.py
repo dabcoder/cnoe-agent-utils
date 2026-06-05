@@ -36,8 +36,9 @@ def main():
         print(f"Error: Missing required environment variables: {', '.join(missing)}")
         sys.exit(1)
 
-    # Enable prompt caching
+    # Enable prompt caching and opt into ChatBedrockConverse for create_cache_point().
     os.environ["AWS_BEDROCK_ENABLE_PROMPT_CACHE"] = "true"
+    os.environ.setdefault("AWS_BEDROCK_CLIENT", "converse")
 
     print("=" * 70)
     print("AWS Bedrock Prompt Caching Example")
@@ -115,7 +116,7 @@ When answering questions:
     # Check for usage metadata (cache statistics)
     if hasattr(response1, 'response_metadata') and 'usage' in response1.response_metadata:
         usage = response1.response_metadata['usage']
-        print(f"\nToken Usage:")
+        print("\nToken Usage:")
         print(f"  Input tokens: {usage.get('inputTokens', 'N/A')}")
         print(f"  Output tokens: {usage.get('outputTokens', 'N/A')}")
         if 'cacheReadInputTokens' in usage:
@@ -145,7 +146,7 @@ When answering questions:
     # Check for cache hit in usage metadata
     if hasattr(response2, 'response_metadata') and 'usage' in response2.response_metadata:
         usage = response2.response_metadata['usage']
-        print(f"\nToken Usage:")
+        print("\nToken Usage:")
         print(f"  Input tokens: {usage.get('inputTokens', 'N/A')}")
         print(f"  Output tokens: {usage.get('outputTokens', 'N/A')}")
         if 'cacheReadInputTokens' in usage:
@@ -177,6 +178,7 @@ When answering questions:
     print("Cache Configuration")
     print("=" * 70)
     print(f"Caching enabled: {os.getenv('AWS_BEDROCK_ENABLE_PROMPT_CACHE', 'false')}")
+    print(f"Bedrock client: {os.getenv('AWS_BEDROCK_CLIENT', 'auto')}")
     print(f"Model: {os.getenv('AWS_BEDROCK_MODEL_ID')}")
     print(f"Region: {os.getenv('AWS_REGION')}")
     print("\nFor more details on cache hits/misses, check CloudWatch metrics:")

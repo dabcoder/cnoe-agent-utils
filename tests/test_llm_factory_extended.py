@@ -23,7 +23,7 @@ class TestLLMFactoryExtendedCoverage:
 
             assert llm is not None
             # Verify the LLM was created with correct parameters
-            assert hasattr(llm, 'model_id')
+            assert getattr(llm, 'model', None) == "anthropic.claude-3-sonnet-20240229-v1"
 
     def test_azure_openai_builder_success(self):
         """Test successful Azure OpenAI LLM creation."""
