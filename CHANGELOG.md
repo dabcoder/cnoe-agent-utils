@@ -1,3 +1,14 @@
+## 0.4.1 (2026-06-05)
+
+### Feat
+
+- **llm**: expose bedrock client resolution helper
+
+### Fix
+
+- **llm**: handle Bedrock client params for Anthropic
+- **llm**: prefer Anthropic Bedrock client for Claude models
+
 ## 0.4.0 (2026-05-01)
 
 ### Feat
