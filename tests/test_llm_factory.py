@@ -472,8 +472,9 @@ class TestLLMFactoryTemperature:
 class TestClaudeDefaultOnlyTemperature:
     """Regression tests for the Claude 5 / 4.6+ 'temperature is deprecated' 400.
 
-    These models reject any non-default `temperature` (Anthropic's own default
-    is 1.0, not this library's implicit default of 0) — see
+    Sampling parameters are removed starting at Opus 4.7 / Sonnet 5, so they must
+    be omitted from the request entirely. Opus 4.6, Sonnet 4.6 and earlier still
+    accept them and must keep this library's historical default of 0. See
     https://platform.claude.com/docs/en/api/errors.md and
     https://platform.claude.com/docs/en/about-claude/models/migration-guide.md.
     """
@@ -483,17 +484,15 @@ class TestClaudeDefaultOnlyTemperature:
         "claude-sonnet-5",
         "claude-fable-5",
         "claude-mythos-5",
-        "claude-opus-4-6",
         "claude-opus-4-7",
         "claude-opus-4-8",
-        "claude-sonnet-4-6",
         "anthropic.claude-sonnet-5",          # Bedrock-prefixed
         "global.anthropic.claude-sonnet-5",   # Bedrock inference-profile-prefixed
         "CLAUDE-OPUS-5",                      # case-insensitive
     ])
     def test_restricted_models_detected(self, model_id):
-        from cnoe_agent_utils.llm_factory import _model_requires_default_temperature
-        assert _model_requires_default_temperature(model_id) is True
+        from cnoe_agent_utils.llm_factory import _model_rejects_sampling_params
+        assert _model_rejects_sampling_params(model_id) is True
 
     @pytest.mark.parametrize("model_id", [
         None,
@@ -501,25 +500,29 @@ class TestClaudeDefaultOnlyTemperature:
         "claude-3-sonnet-20240229-v1",
         "claude-sonnet-4-5",
         "claude-opus-4-5",
+        # Sampling params are still ALLOWED on the 4.6 generation — regression
+        # guard so these never get pulled back into the restricted list.
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
         "gpt-5",
         "anthropic.claude-3-haiku-20240307-v1:0",
     ])
     def test_unrestricted_models_not_detected(self, model_id):
-        from cnoe_agent_utils.llm_factory import _model_requires_default_temperature
-        assert _model_requires_default_temperature(model_id) is False
+        from cnoe_agent_utils.llm_factory import _model_rejects_sampling_params
+        assert _model_rejects_sampling_params(model_id) is False
 
-    def test_bedrock_builder_omits_zero_default_for_restricted_model(self):
-        """The library's implicit default of 0 must not be sent to Claude 5 —
-        it should be replaced with Anthropic's actual default (1.0)."""
+    def test_bedrock_builder_omits_temperature_for_restricted_model(self):
+        """The library's implicit default of 0 must not reach Claude 5, and no
+        substitute value may be sent either — the key must be absent."""
         factory = LLMFactory("aws-bedrock")
         with patch.dict(os.environ, {
             "AWS_BEDROCK_MODEL_ID": "anthropic.claude-sonnet-5",
             "AWS_REGION": "us-east-1",
         }):
             with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
-                factory._build_aws_bedrock_llm(None, None)
+                factory._build_aws_bedrock_llm(None, 0.0)
                 _, kwargs = mock_chat.call_args
-                assert kwargs.get("temperature") == 1.0
+                assert "temperature" not in kwargs
 
     def test_bedrock_builder_unaffected_for_older_model(self):
         """Backward compatibility: models outside the restricted list keep the
@@ -534,39 +537,103 @@ class TestClaudeDefaultOnlyTemperature:
                 _, kwargs = mock_chat.call_args
                 assert kwargs.get("temperature") == 0
 
-    def test_bedrock_builder_drops_explicit_non_default_for_restricted_model(self):
-        """An explicit non-default temperature on a restricted model is dropped
-        (not sent) rather than forwarded to a request that would 400."""
+    def test_bedrock_builder_unaffected_for_4_6_model(self):
+        """Opus/Sonnet 4.6 accept sampling params — an explicit 0.3 must survive."""
         factory = LLMFactory("aws-bedrock")
         with patch.dict(os.environ, {
-            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-sonnet-4-6",
             "AWS_REGION": "us-east-1",
         }):
             with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
                 factory._build_aws_bedrock_llm(None, 0.3)
                 _, kwargs = mock_chat.call_args
-                assert "temperature" not in kwargs
+                assert kwargs.get("temperature") == 0.3
 
-    def test_bedrock_builder_keeps_explicit_default_for_restricted_model(self):
-        """An explicit temperature matching Anthropic's default (1.0) is kept."""
+    @pytest.mark.parametrize("temperature", [0.0, 0.3, 1.0, 2.0])
+    def test_bedrock_builder_omits_every_temperature_for_restricted_model(self, temperature):
+        """No temperature value — including Anthropic's default of 1.0 — is sent."""
         factory = LLMFactory("aws-bedrock")
         with patch.dict(os.environ, {
             "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
             "AWS_REGION": "us-east-1",
         }):
             with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
-                factory._build_aws_bedrock_llm(None, 1.0)
+                factory._build_aws_bedrock_llm(None, temperature)
                 _, kwargs = mock_chat.call_args
-                assert kwargs.get("temperature") == 1.0
+                assert "temperature" not in kwargs
 
-    def test_anthropic_builder_omits_zero_default_for_restricted_model(self):
+    def test_bedrock_builder_strips_top_p_and_top_k_for_restricted_model(self):
+        """top_p/top_k are rejected by the same models and must also be stripped."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, 0.0, top_p=0.9, top_k=40)
+                _, kwargs = mock_chat.call_args
+                assert "top_p" not in kwargs
+                assert "top_k" not in kwargs
+
+    def test_bedrock_builder_keeps_top_p_for_older_model(self):
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, None, top_p=0.9)
+                _, kwargs = mock_chat.call_args
+                assert kwargs.get("top_p") == 0.9
+
+    def test_get_llm_public_path_omits_temperature_for_restricted_model(self):
+        """Covers the real code path: get_llm() resolves an unset temperature to
+        0.0 before the builder sees it, so the builder must handle that value."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }, clear=False):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory.get_llm()
+                _, kwargs = mock_chat.call_args
+                assert "temperature" not in kwargs
+
+    def test_no_warning_when_caller_set_no_temperature(self, caplog):
+        """A default construction must not log a warning about 'dropping' a value
+        the caller never set."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock"):
+                with caplog.at_level("WARNING"):
+                    factory.get_llm()
+        assert "does not accept sampling parameters" not in caplog.text
+
+    def test_warning_when_caller_set_explicit_temperature(self, caplog):
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock"):
+                with caplog.at_level("WARNING"):
+                    factory._build_aws_bedrock_llm(None, 0.7)
+        assert "does not accept sampling parameters" in caplog.text
+        assert "temperature=0.7" in caplog.text
+
+    def test_anthropic_builder_omits_temperature_for_restricted_model(self):
         factory = LLMFactory("anthropic-claude")
         with patch.dict(os.environ, {
             "ANTHROPIC_API_KEY": "test-key",
             "ANTHROPIC_MODEL_NAME": "claude-sonnet-5",
         }):
-            llm = factory._build_anthropic_claude_llm(None, None)
-            assert llm.temperature == 1.0
+            with patch("langchain_anthropic.ChatAnthropic") as mock_chat:
+                factory._build_anthropic_claude_llm(None, 0.0)
+                _, kwargs = mock_chat.call_args
+                assert "temperature" not in kwargs
 
     def test_anthropic_builder_unaffected_for_older_model(self):
         factory = LLMFactory("anthropic-claude")
@@ -576,6 +643,15 @@ class TestClaudeDefaultOnlyTemperature:
         }):
             llm = factory._build_anthropic_claude_llm(None, None)
             assert llm.temperature == 0
+
+    def test_vertexai_builder_is_not_subject_to_anthropic_rule(self):
+        """_build_gcp_vertexai_llm constructs ChatVertexAI (Gemini), not
+        ChatAnthropicVertex, so the Anthropic sampling rule must not apply."""
+        import inspect
+        from cnoe_agent_utils.llm_factory import LLMFactory as _F
+        src = inspect.getsource(_F._build_gcp_vertexai_llm)
+        assert "_sanitize_sampling_params" not in src
+        assert "temperature" in src
 
 
 if __name__ == "__main__":
