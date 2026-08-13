@@ -469,5 +469,114 @@ class TestLLMFactoryTemperature:
                 mock_builder.assert_called_once_with(None, 0.0)  # Falls back to 0.0
 
 
+class TestClaudeDefaultOnlyTemperature:
+    """Regression tests for the Claude 5 / 4.6+ 'temperature is deprecated' 400.
+
+    These models reject any non-default `temperature` (Anthropic's own default
+    is 1.0, not this library's implicit default of 0) — see
+    https://platform.claude.com/docs/en/api/errors.md and
+    https://platform.claude.com/docs/en/about-claude/models/migration-guide.md.
+    """
+
+    @pytest.mark.parametrize("model_id", [
+        "claude-opus-5",
+        "claude-sonnet-5",
+        "claude-fable-5",
+        "claude-mythos-5",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6",
+        "anthropic.claude-sonnet-5",          # Bedrock-prefixed
+        "global.anthropic.claude-sonnet-5",   # Bedrock inference-profile-prefixed
+        "CLAUDE-OPUS-5",                      # case-insensitive
+    ])
+    def test_restricted_models_detected(self, model_id):
+        from cnoe_agent_utils.llm_factory import _model_requires_default_temperature
+        assert _model_requires_default_temperature(model_id) is True
+
+    @pytest.mark.parametrize("model_id", [
+        None,
+        "",
+        "claude-3-sonnet-20240229-v1",
+        "claude-sonnet-4-5",
+        "claude-opus-4-5",
+        "gpt-5",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+    ])
+    def test_unrestricted_models_not_detected(self, model_id):
+        from cnoe_agent_utils.llm_factory import _model_requires_default_temperature
+        assert _model_requires_default_temperature(model_id) is False
+
+    def test_bedrock_builder_omits_zero_default_for_restricted_model(self):
+        """The library's implicit default of 0 must not be sent to Claude 5 —
+        it should be replaced with Anthropic's actual default (1.0)."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-sonnet-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, None)
+                _, kwargs = mock_chat.call_args
+                assert kwargs.get("temperature") == 1.0
+
+    def test_bedrock_builder_unaffected_for_older_model(self):
+        """Backward compatibility: models outside the restricted list keep the
+        library's original default of 0."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-3-sonnet-20240229-v1:0",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, None)
+                _, kwargs = mock_chat.call_args
+                assert kwargs.get("temperature") == 0
+
+    def test_bedrock_builder_drops_explicit_non_default_for_restricted_model(self):
+        """An explicit non-default temperature on a restricted model is dropped
+        (not sent) rather than forwarded to a request that would 400."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, 0.3)
+                _, kwargs = mock_chat.call_args
+                assert "temperature" not in kwargs
+
+    def test_bedrock_builder_keeps_explicit_default_for_restricted_model(self):
+        """An explicit temperature matching Anthropic's default (1.0) is kept."""
+        factory = LLMFactory("aws-bedrock")
+        with patch.dict(os.environ, {
+            "AWS_BEDROCK_MODEL_ID": "anthropic.claude-opus-5",
+            "AWS_REGION": "us-east-1",
+        }):
+            with patch("langchain_aws.ChatAnthropicBedrock") as mock_chat:
+                factory._build_aws_bedrock_llm(None, 1.0)
+                _, kwargs = mock_chat.call_args
+                assert kwargs.get("temperature") == 1.0
+
+    def test_anthropic_builder_omits_zero_default_for_restricted_model(self):
+        factory = LLMFactory("anthropic-claude")
+        with patch.dict(os.environ, {
+            "ANTHROPIC_API_KEY": "test-key",
+            "ANTHROPIC_MODEL_NAME": "claude-sonnet-5",
+        }):
+            llm = factory._build_anthropic_claude_llm(None, None)
+            assert llm.temperature == 1.0
+
+    def test_anthropic_builder_unaffected_for_older_model(self):
+        factory = LLMFactory("anthropic-claude")
+        with patch.dict(os.environ, {
+            "ANTHROPIC_API_KEY": "test-key",
+            "ANTHROPIC_MODEL_NAME": "claude-3-sonnet-20240229-v1",
+        }):
+            llm = factory._build_anthropic_claude_llm(None, None)
+            assert llm.temperature == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

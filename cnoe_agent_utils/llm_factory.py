@@ -55,6 +55,70 @@ _BEDROCK_CLIENT_ALIASES = {
     "chatbedrock": "legacy",
 }
 
+# Claude model families whose provider API rejects a non-default `temperature`
+# (and other sampling params) with a 400 error. Matched as a substring against
+# the (lowercased) model id so this also catches provider-prefixed forms like
+# "anthropic.claude-sonnet-5" (Bedrock) or "global.anthropic.claude-opus-5".
+_ANTHROPIC_DEFAULT_TEMPERATURE_ONLY_MODELS = (
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+)
+
+# Anthropic's own default for `temperature` (see platform.claude.com/docs/en/api/messages).
+_ANTHROPIC_DEFAULT_TEMPERATURE = 1.0
+
+
+def _model_requires_default_temperature(model_id: Optional[str]) -> bool:
+    """True if `model_id` is a Claude model that 400s on non-default sampling params.
+
+    These models only accept `temperature`/`top_p`/`top_k` at their provider
+    default (temperature=1.0) — any other value, including this library's own
+    implicit default of 0, is rejected with:
+        `temperature` is deprecated for this model.
+    """
+    if not model_id:
+        return False
+    lowered = model_id.lower()
+    return any(needle in lowered for needle in _ANTHROPIC_DEFAULT_TEMPERATURE_ONLY_MODELS)
+
+
+def _resolve_temperature_kwarg(
+    model_id: Optional[str],
+    temperature: Optional[float],
+    provider_label: str,
+) -> Dict[str, float]:
+    """Build the `{"temperature": ...}` kwarg dict for a Claude request.
+
+    Backward compatible: for every model outside `_ANTHROPIC_DEFAULT_TEMPERATURE_ONLY_MODELS`,
+    behavior is unchanged — `temperature` if explicitly given, else this
+    library's long-standing default of 0.
+
+    For the restricted models, `temperature` is included only when it is
+    Anthropic's own default (1.0) or unset (in which case we pass 1.0
+    explicitly rather than this library's default of 0, which those models
+    reject). An explicit non-default value is dropped (not sent) with a
+    warning instead of causing a hard 400 at request time.
+    """
+    if not _model_requires_default_temperature(model_id):
+        return {"temperature": temperature if temperature is not None else 0}
+
+    if temperature is None or temperature == _ANTHROPIC_DEFAULT_TEMPERATURE:
+        return {"temperature": _ANTHROPIC_DEFAULT_TEMPERATURE}
+
+    logging.warning(
+        "[LLM] model=%s (%s) only accepts the default temperature (%s); "
+        "dropping explicit temperature=%s instead of sending a value the API will reject.",
+        model_id, provider_label, _ANTHROPIC_DEFAULT_TEMPERATURE, temperature,
+    )
+    return {}
+
+
 def _as_bool(v: Optional[str], default: bool=False) -> bool:
     if v is None:
         return default
@@ -455,7 +519,7 @@ class LLMFactory:
     # Build common args for both ChatBedrock and ChatBedrockConverse
     common_args = {
       "model_id": model_id,
-      "temperature": temperature if temperature is not None else 0,
+      **_resolve_temperature_kwarg(model_id, temperature, "AWS Bedrock"),
       **kwargs,
     }
 
@@ -604,8 +668,8 @@ class LLMFactory:
     return ChatAnthropic(
       model_name=model_name,
       anthropic_api_key=api_key,
-      temperature=temperature if temperature is not None else 0,
       model_kwargs=model_kwargs,
+      **_resolve_temperature_kwarg(model_name, temperature, "Anthropic"),
       **kwargs,
     )
 
@@ -930,7 +994,7 @@ class LLMFactory:
       "project": project_id,
       "location": location,
       "credentials": credentials,
-      "temperature": temperature if temperature is not None else 0,
+      **_resolve_temperature_kwarg(model_name, temperature, "Google Vertex AI"),
       "max_retries": 6,
       "stop": None,
       "model_kwargs": model_kwargs,
